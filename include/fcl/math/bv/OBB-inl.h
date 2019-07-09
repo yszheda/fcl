@@ -42,8 +42,14 @@
 
 #include "fcl/common/unused.h"
 
+#include "fcl/math/math_simd_details.h"
+
 namespace fcl
 {
+
+#if defined (__SSE4__)
+  using namespace fcl::details;
+#endif
 
 //==============================================================================
 extern template
@@ -94,6 +100,161 @@ OBB<S>::OBB(const Matrix3<S>& axis_,
 }
 
 //==============================================================================
+#if defined (__AVX__)
+inline bool obbDisjoint(const __m256d* R, const __m256d& t, const __m256d& r1, const __m256d& r2)
+{
+  const double reps = 1e-6;
+  const __m256d epsilonxyz = _mm256_setr_pd(reps, reps, reps, 0);
+  __m256d AbsR[3];
+  AbsR[0] = _mm256_add_pd(abs_pd(R[0]), epsilonxyz);
+  AbsR[1] = _mm256_add_pd(abs_pd(R[1]), epsilonxyz);
+  AbsR[2] = _mm256_add_pd(abs_pd(R[2]), epsilonxyz);
+
+  // Test the three major axes of this OBB.
+  __m256d res = _mm256_cmp_pd(abs_pd(t), _mm256_add_pd(r1, mat3x4_mul_vec4(AbsR, r2)), _CMP_GT_OQ);
+  if (!allzero_pd(res)) return true;
+
+  // Test the three major axes of the OBB b.
+  __m256d l = abs_pd(transp_mat3x4_mul_vec4(R, t));
+  __m256d s = transp_mat3x4_mul_vec4(AbsR, r1);
+  res = _mm256_cmp_pd(l, _mm256_add_pd(s, r2), _CMP_GT_OQ);
+  if (!allzero_pd(res)) return true;
+
+  // Test the 9 different cross-axes.
+  __m256d symmetric_matrix[3] = {
+    _mm256_setr_pd(    0, r2[2], r2[1], 0),
+    _mm256_setr_pd(r2[2],     0, r2[0], 0),
+    _mm256_setr_pd(r2[1], r2[0],     0, 0),
+  };
+
+  // A.x <cross> B.x
+  // A.x <cross> B.y
+  // A.x <cross> B.z
+  // __m256d ra = fmadd_pd(yyyw_pd(r1), AbsR[2], _mm256_mul_pd(zzzw_pd(r1), AbsR[1]));
+  __m256d ra = fmadd_pd(vec_splat_pd(r1, 1), AbsR[2], _mm256_mul_pd(vec_splat_pd(r1, 2), AbsR[1]));
+  __m256d rb = mat3x4_mul_vec4(symmetric_matrix, AbsR[0]);
+  // __m256d lhs = fmsub_pd(zzzw_pd(t), R[1], _mm256_mul_pd(yyyw_pd(t), R[2]));
+  __m256d lhs = fmsub_pd(vec_splat_pd(t, 2), R[1], _mm256_mul_pd(vec_splat_pd(t, 1), R[2]));
+  res = _mm256_cmp_pd(abs_pd(lhs), _mm256_add_pd(ra, rb), _CMP_GT_OQ);
+  if (!allzero_pd(res)) return true;
+
+  // A.y <cross> B.x
+  // A.y <cross> B.y
+  // A.y <cross> B.z
+  // ra = fmadd_pd(xxxw_pd(r1), AbsR[2], _mm256_mul_pd(zzzw_pd(r1), AbsR[0]));
+  ra = fmadd_pd(vec_splat_pd(r1, 0), AbsR[2], _mm256_mul_pd(vec_splat_pd(r1, 2), AbsR[0]));
+  rb = mat3x4_mul_vec4(symmetric_matrix, AbsR[1]);
+  // lhs = fmsub_pd(xxxw_pd(t), R[2], _mm256_mul_pd(zzzw_pd(t), R[0]));
+  lhs = fmsub_pd(vec_splat_pd(t, 0), R[2], _mm256_mul_pd(vec_splat_pd(t, 2), R[0]));
+  res = _mm256_cmp_pd(abs_pd(lhs), _mm256_add_pd(ra, rb), _CMP_GT_OQ);
+  if (!allzero_pd(res)) return true;
+
+  // A.z <cross> B.x
+  // A.z <cross> B.y
+  // A.z <cross> B.z
+  // ra = fmadd_pd(xxxw_pd(r1), AbsR[1], _mm256_mul_pd(yyyw_pd(r1), AbsR[0]));
+  ra = fmadd_pd(vec_splat_pd(r1, 0), AbsR[1], _mm256_mul_pd(vec_splat_pd(r1, 1), AbsR[0]));
+  rb = mat3x4_mul_vec4(symmetric_matrix, AbsR[2]);
+  // lhs = fmsub_pd(yyyw_pd(t), R[0], _mm256_mul_pd(xxxw_pd(t), R[1]));
+  lhs = fmsub_pd(vec_splat_pd(t, 1), R[0], _mm256_mul_pd(vec_splat_pd(t, 0), R[1]));
+  res = _mm256_cmp_pd(abs_pd(lhs), _mm256_add_pd(ra, rb), _CMP_GT_OQ);
+  return (!allzero_pd(res));
+}
+#endif
+
+#if defined (__SSE4__)
+inline bool obbDisjoint(const __m128* R, const __m128& t, const __m128& r1, const __m128& r2)
+{
+  const float reps = 1e-6;
+  const __m128 epsilonxyz = _mm_setr_ps(reps, reps, reps, 0.f);
+  __m128 AbsR[3];
+  AbsR[0] = _mm_add_ps(abs_ps(R[0]), epsilonxyz);
+  AbsR[1] = _mm_add_ps(abs_ps(R[1]), epsilonxyz);
+  AbsR[2] = _mm_add_ps(abs_ps(R[2]), epsilonxyz);
+
+  // Test the three major axes of this OBB.
+  __m128 res = _mm_cmpgt_ps(abs_ps(t), _mm_add_ps(r1, mat3x4_mul_vec4(AbsR, r2)));
+  if (!allzero_ps(res)) return true;
+
+  // Test the three major axes of the OBB b.
+  __m128 l = abs_ps(transp_mat3x4_mul_vec4(R, t));
+  __m128 s = transp_mat3x4_mul_vec4(AbsR, r1);
+  res = _mm_cmpgt_ps(l, _mm_add_ps(s, r2));
+  if (!allzero_ps(res)) return true;
+
+  // Test the 9 different cross-axes.
+  __m128 symmetric_matrix[3] = {
+    _mm_setr_ps(  0.f, r2[2], r2[1], 0.f),
+    _mm_setr_ps(r2[2],   0.f, r2[0], 0.f),
+    _mm_setr_ps(r2[1], r2[0],   0.f, 0.f),
+  };
+
+  // A.x <cross> B.x
+  // A.x <cross> B.y
+  // A.x <cross> B.z
+  // __m128 ra = fmadd_ps(yyyw_ps(r1), AbsR[2], _mm_mul_ps(zzzw_ps(r1), AbsR[1]));
+  __m128 ra = fmadd_ps(vec_splat_ps(r1, 1), AbsR[2], _mm_mul_ps(vec_splat_ps(r1, 2), AbsR[1]));
+  __m128 rb = mat3x4_mul_vec4(symmetric_matrix, AbsR[0]);
+  // __m128 lhs = fmsub_ps(zzzw_ps(t), R[1], _mm_mul_ps(yyyw_ps(t), R[2]));
+  __m128 lhs = fmsub_ps(vec_splat_ps(t, 2), R[1], _mm_mul_ps(vec_splat_ps(t, 1), R[2]));
+  res = _mm_cmpgt_ps(abs_ps(lhs), _mm_add_ps(ra, rb));
+  if (!allzero_ps(res)) return true;
+
+  // A.y <cross> B.x
+  // A.y <cross> B.y
+  // A.y <cross> B.z
+  // ra = fmadd_ps(xxxw_ps(r1), AbsR[2], _mm_mul_ps(zzzw_ps(r1), AbsR[0]));
+  ra = fmadd_ps(vec_splat_ps(r1, 0), AbsR[2], _mm_mul_ps(vec_splat_ps(r1, 2), AbsR[0]));
+  rb = mat3x4_mul_vec4(symmetric_matrix, AbsR[1]);
+  // lhs = fmsub_ps(xxxw_ps(t), R[2], _mm_mul_ps(zzzw_ps(t), R[0]));
+  lhs = fmsub_ps(vec_splat_ps(t, 0), R[2], _mm_mul_ps(vec_splat_ps(t, 2), R[0]));
+  res = _mm_cmpgt_ps(abs_ps(lhs), _mm_add_ps(ra, rb));
+  if (!allzero_ps(res)) return true;
+
+  // A.z <cross> B.x
+  // A.z <cross> B.y
+  // A.z <cross> B.z
+  // ra = fmadd_ps(xxxw_ps(r1), AbsR[1], _mm_mul_ps(yyyw_ps(r1), AbsR[0]));
+  ra = fmadd_ps(vec_splat_ps(r1, 0), AbsR[1], _mm_mul_ps(vec_splat_ps(r1, 1), AbsR[0]));
+  rb = mat3x4_mul_vec4(symmetric_matrix, AbsR[2]);
+  // lhs = fmsub_ps(yyyw_ps(t), R[0], _mm_mul_ps(xxxw_ps(t), R[1]));
+  lhs = fmsub_ps(vec_splat_ps(t, 1), R[0], _mm_mul_ps(vec_splat_ps(t, 0), R[1]));
+  res = _mm_cmpgt_ps(abs_ps(lhs), _mm_add_ps(ra, rb));
+  return (!allzero_ps(res));
+}
+#endif
+
+//==============================================================================
+// #if defined (__SSE4__)
+// template <typename S>
+// bool OBB<S>::overlap(const OBB<S>& other) const
+// {
+//   __m128 center1 = _mm_setr_ps(To[0], To[1], To[2], 0.f);
+//   __m128 center2 = _mm_setr_ps(other.To[0], other.To[1], other.To[2], 0.f);
+// 
+//   __m128 axis1[3] = {
+//     _mm_setr_ps(axis(0, 0), axis(0, 1), axis(0, 2), 0.f),
+//     _mm_setr_ps(axis(1, 0), axis(1, 1), axis(1, 2), 0.f),
+//     _mm_setr_ps(axis(2, 0), axis(2, 1), axis(2, 2), 0.f),
+//   };
+//   __m128 axis2[3] = {
+//     _mm_setr_ps(other.axis(0, 0), other.axis(0, 1), other.axis(0, 2), 0.f),
+//     _mm_setr_ps(other.axis(1, 0), other.axis(1, 1), other.axis(1, 2), 0.f),
+//     _mm_setr_ps(other.axis(2, 0), other.axis(2, 1), other.axis(2, 2), 0.f),
+//   };
+//   __m128 r1 = _mm_setr_ps(extent[0], extent[1], extent[2], 0.f);
+//   __m128 r2 = _mm_setr_ps(other.extent[0], other.extent[1], other.extent[2], 0.f);
+// 
+//   // Generate the rotation matrix
+//   __m128 R[3];
+//   mat3x3_mul_transp_mat3x3(R, axis1, axis2);
+// 
+//   // Generate the translation vector
+//   __m128 t = mat3x4_mul_vec4(axis1, _mm_sub_ps(center2, center1));
+// 
+//   return !obbDisjoint(R, t, r1, r2);
+// }
+// #else
 template <typename S>
 bool OBB<S>::overlap(const OBB<S>& other) const
 {
@@ -107,6 +268,7 @@ bool OBB<S>::overlap(const OBB<S>& other) const
 
   return !obbDisjoint(R, T, extent, other.extent);
 }
+// #endif
 
 //==============================================================================
 template <typename S>
@@ -380,6 +542,51 @@ OBB<S> translate(
 }
 
 //==============================================================================
+// #if defined (__SSE4__)
+// template <typename S, typename DerivedA, typename DerivedB>
+// bool overlap(const Eigen::MatrixBase<DerivedA>& R0,
+//              const Eigen::MatrixBase<DerivedB>& T0,
+//              const OBB<S>& b1, const OBB<S>& b2)
+// {
+//   // NOTE: The default storage order of Eigen matrix is column-major.
+//   __m128 R0_sse[3] = {
+//     _mm_setr_ps(R0(0, 0), R0(1, 0), R0(2, 0), 0.f),
+//     _mm_setr_ps(R0(0, 1), R0(1, 1), R0(2, 1), 0.f),
+//     _mm_setr_ps(R0(0, 2), R0(1, 2), R0(2, 2), 0.f),
+//   };
+// 
+//   __m128 T0_sse = _mm_setr_ps(T0[0], T0[1], T0[2], 0.f);
+// 
+//   __m128 center1 = _mm_setr_ps(b1.To[0], b1.To[1], b1.To[2], 0.f);
+//   __m128 center2 = _mm_setr_ps(b2.To[0], b2.To[1], b2.To[2], 0.f);
+// 
+//   __m128 axis1[3] = {
+//     _mm_setr_ps(b1.axis(0, 0), b1.axis(1, 0), b1.axis(2, 0), 0.f),
+//     _mm_setr_ps(b1.axis(0, 1), b1.axis(1, 1), b1.axis(2, 1), 0.f),
+//     _mm_setr_ps(b1.axis(0, 2), b1.axis(1, 2), b1.axis(2, 2), 0.f),
+//   };
+//   __m128 axis2[3] = {
+//     _mm_setr_ps(b2.axis(0, 0), b2.axis(1, 0), b2.axis(2, 0), 0.f),
+//     _mm_setr_ps(b2.axis(0, 1), b2.axis(1, 1), b2.axis(2, 1), 0.f),
+//     _mm_setr_ps(b2.axis(0, 2), b2.axis(1, 2), b2.axis(2, 2), 0.f),
+//   };
+// 
+//   __m128 r1 = _mm_setr_ps(b1.extent[0], b1.extent[1], b1.extent[2], 0.f);
+//   __m128 r2 = _mm_setr_ps(b2.extent[0], b2.extent[1], b2.extent[2], 0.f);
+// 
+//   // Generate the rotation matrix
+//   __m128 R0b2_sse[3];
+//   mat3x3_mul_transp_mat3x3(R0b2_sse, R0_sse, axis2);
+//   __m128 R[3];
+//   mat3x3_mul_mat3x3(R, axis1, R0b2_sse);
+// 
+//   // Generate the translation vector
+//   __m128 t = mat3x4_mul_vec4(axis1, _mm_sub_ps(_mm_add_ps(mat3x4_mul_vec4(R0_sse, center2), T0_sse), center1));
+// 
+//   bool result = !obbDisjoint(R, t, r1, r2);
+//   return result;
+// }
+// #else
 template <typename S, typename DerivedA, typename DerivedB>
 bool overlap(const Eigen::MatrixBase<DerivedA>& R0,
              const Eigen::MatrixBase<DerivedB>& T0,
@@ -393,8 +600,40 @@ bool overlap(const Eigen::MatrixBase<DerivedA>& R0,
 
   return !obbDisjoint(R, T, b1.extent, b2.extent);
 }
+// #endif
 
 //==============================================================================
+#if defined (__AVX__)
+template <typename S>
+bool obbDisjoint(const Matrix3<S>& B, const Vector3<S>& T,
+                 const Vector3<S>& a, const Vector3<S>& b)
+{
+  __m256d B_avx[3] = {
+    _mm256_setr_pd(B(0, 0), B(0, 1), B(0, 2), 0),
+    _mm256_setr_pd(B(1, 0), B(1, 1), B(1, 2), 0),
+    _mm256_setr_pd(B(2, 0), B(2, 1), B(2, 2), 0),
+  };
+  __m256d T_avx = _mm256_setr_pd(T[0], T[1], T[2], 0);
+  __m256d a_avx = _mm256_setr_pd(a[0], a[1], a[2], 0);
+  __m256d b_avx = _mm256_setr_pd(b[0], b[1], b[2], 0);
+  return obbDisjoint(B_avx, T_avx, a_avx, b_avx);
+}
+#elif defined (__SSE4__)
+template <typename S>
+bool obbDisjoint(const Matrix3<S>& B, const Vector3<S>& T,
+                 const Vector3<S>& a, const Vector3<S>& b)
+{
+  __m128 B_sse[3] = {
+    _mm_setr_ps(B(0, 0), B(0, 1), B(0, 2), 0.f),
+    _mm_setr_ps(B(1, 0), B(1, 1), B(1, 2), 0.f),
+    _mm_setr_ps(B(2, 0), B(2, 1), B(2, 2), 0.f),
+  };
+  __m128 T_sse = _mm_setr_ps(T[0], T[1], T[2], 0.f);
+  __m128 a_sse = _mm_setr_ps(a[0], a[1], a[2], 0.f);
+  __m128 b_sse = _mm_setr_ps(b[0], b[1], b[2], 0.f);
+  return obbDisjoint(B_sse, T_sse, a_sse, b_sse);
+}
+#else
 template <typename S>
 bool obbDisjoint(const Matrix3<S>& B, const Vector3<S>& T,
                  const Vector3<S>& a, const Vector3<S>& b)
@@ -521,6 +760,7 @@ bool obbDisjoint(const Matrix3<S>& B, const Vector3<S>& T,
   return false;
 
 }
+#endif
 
 //==============================================================================
 template <typename S>
@@ -529,126 +769,9 @@ bool obbDisjoint(
     const Vector3<S>& a,
     const Vector3<S>& b)
 {
-  S t, s;
-  const S reps = 1e-6;
-
-  Matrix3<S> Bf = tf.linear().cwiseAbs();
-  Bf.array() += reps;
-
-  // if any of these tests are one-sided, then the polyhedra are disjoint
-
-  // A1 x A2 = A0
-  t = ((tf.translation()[0] < 0.0) ? -tf.translation()[0] : tf.translation()[0]);
-
-  if(t > (a[0] + Bf.row(0).dot(b)))
-    return true;
-
-  // B1 x B2 = B0
-  s =  tf.linear().col(0).dot(tf.translation());
-  t = ((s < 0.0) ? -s : s);
-
-  if(t > (b[0] + Bf.col(0).dot(a)))
-    return true;
-
-  // A2 x A0 = A1
-  t = ((tf.translation()[1] < 0.0) ? -tf.translation()[1] : tf.translation()[1]);
-
-  if(t > (a[1] + Bf.row(1).dot(b)))
-    return true;
-
-  // A0 x A1 = A2
-  t =((tf.translation()[2] < 0.0) ? -tf.translation()[2] : tf.translation()[2]);
-
-  if(t > (a[2] + Bf.row(2).dot(b)))
-    return true;
-
-  // B2 x B0 = B1
-  s = tf.linear().col(1).dot(tf.translation());
-  t = ((s < 0.0) ? -s : s);
-
-  if(t > (b[1] + Bf.col(1).dot(a)))
-    return true;
-
-  // B0 x B1 = B2
-  s = tf.linear().col(2).dot(tf.translation());
-  t = ((s < 0.0) ? -s : s);
-
-  if(t > (b[2] + Bf.col(2).dot(a)))
-    return true;
-
-  // A0 x B0
-  s = tf.translation()[2] * tf.linear()(1, 0) - tf.translation()[1] * tf.linear()(2, 0);
-  t = ((s < 0.0) ? -s : s);
-
-  if(t > (a[1] * Bf(2, 0) + a[2] * Bf(1, 0) +
-          b[1] * Bf(0, 2) + b[2] * Bf(0, 1)))
-    return true;
-
-  // A0 x B1
-  s = tf.translation()[2] * tf.linear()(1, 1) - tf.translation()[1] * tf.linear()(2, 1);
-  t = ((s < 0.0) ? -s : s);
-
-  if(t > (a[1] * Bf(2, 1) + a[2] * Bf(1, 1) +
-          b[0] * Bf(0, 2) + b[2] * Bf(0, 0)))
-    return true;
-
-  // A0 x B2
-  s = tf.translation()[2] * tf.linear()(1, 2) - tf.translation()[1] * tf.linear()(2, 2);
-  t = ((s < 0.0) ? -s : s);
-
-  if(t > (a[1] * Bf(2, 2) + a[2] * Bf(1, 2) +
-          b[0] * Bf(0, 1) + b[1] * Bf(0, 0)))
-    return true;
-
-  // A1 x B0
-  s = tf.translation()[0] * tf.linear()(2, 0) - tf.translation()[2] * tf.linear()(0, 0);
-  t = ((s < 0.0) ? -s : s);
-
-  if(t > (a[0] * Bf(2, 0) + a[2] * Bf(0, 0) +
-          b[1] * Bf(1, 2) + b[2] * Bf(1, 1)))
-    return true;
-
-  // A1 x B1
-  s = tf.translation()[0] * tf.linear()(2, 1) - tf.translation()[2] * tf.linear()(0, 1);
-  t = ((s < 0.0) ? -s : s);
-
-  if(t > (a[0] * Bf(2, 1) + a[2] * Bf(0, 1) +
-          b[0] * Bf(1, 2) + b[2] * Bf(1, 0)))
-    return true;
-
-  // A1 x B2
-  s = tf.translation()[0] * tf.linear()(2, 2) - tf.translation()[2] * tf.linear()(0, 2);
-  t = ((s < 0.0) ? -s : s);
-
-  if(t > (a[0] * Bf(2, 2) + a[2] * Bf(0, 2) +
-          b[0] * Bf(1, 1) + b[1] * Bf(1, 0)))
-    return true;
-
-  // A2 x B0
-  s = tf.translation()[1] * tf.linear()(0, 0) - tf.translation()[0] * tf.linear()(1, 0);
-  t = ((s < 0.0) ? -s : s);
-
-  if(t > (a[0] * Bf(1, 0) + a[1] * Bf(0, 0) +
-          b[1] * Bf(2, 2) + b[2] * Bf(2, 1)))
-    return true;
-
-  // A2 x B1
-  s = tf.translation()[1] * tf.linear()(0, 1) - tf.translation()[0] * tf.linear()(1, 1);
-  t = ((s < 0.0) ? -s : s);
-
-  if(t > (a[0] * Bf(1, 1) + a[1] * Bf(0, 1) +
-          b[0] * Bf(2, 2) + b[2] * Bf(2, 0)))
-    return true;
-
-  // A2 x B2
-  s = tf.translation()[1] * tf.linear()(0, 2) - tf.translation()[0] * tf.linear()(1, 2);
-  t = ((s < 0.0) ? -s : s);
-
-  if(t > (a[0] * Bf(1, 2) + a[1] * Bf(0, 2) +
-          b[0] * Bf(2, 1) + b[1] * Bf(2, 0)))
-    return true;
-
-  return false;
+  Matrix3<S> B = tf.linear();
+  Vector3<S> T = tf.translation();
+  return obbDisjoint(B, T, a, b);
 }
 
 } // namespace fcl
