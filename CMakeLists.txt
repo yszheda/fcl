@@ -87,7 +87,16 @@ endif()
 
 # Whether to enable SSE
 set(SSE_FLAGS "")
-option(FCL_USE_X64_SSE "Whether FCL should x64 SSE instructions" ON)
+option(FCL_USE_SSE4 "Whether FCL should use SSE4 instructions" ON)
+option(FCL_USE_X64_SSE "Whether FCL should x64 SSE instructions" OFF)
+
+if(FCL_USE_SSE4)
+  if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    set(SSE_FLAGS -mfpmath=sse -msse4)
+  endif()
+  add_compile_options(${SSE_FLAGS})
+endif()
+
 if(FCL_USE_X64_SSE)
   if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     set(SSE_FLAGS -mfpmath=sse -msse -msse2 -msse3 -mssse3)
