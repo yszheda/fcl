@@ -100,9 +100,7 @@ bool OBB<S>::overlap(const OBB<S>& other) const
   /// compute the relative transform that takes us from this->frame to
   /// other.frame
 
-  Vector3<S> t = other.To - To;
-  Vector3<S> T(
-        axis.col(0).dot(t), axis.col(1).dot(t), axis.col(2).dot(t));
+  Vector3<S> T = axis.transpose() * (other.To - To);
   Matrix3<S> R = axis.transpose() * other.axis;
 
   return !obbDisjoint(R, T, extent, other.extent);
@@ -399,127 +397,67 @@ template <typename S>
 bool obbDisjoint(const Matrix3<S>& B, const Vector3<S>& T,
                  const Vector3<S>& a, const Vector3<S>& b)
 {
-  S t, s;
+  Vector3<S> center_dist;     // projection of center distance along three axes
+  Vector3<S> halfwidth_sum;   // projection of the sum of halfwidths along three axes
+  Vector3<S> diff;
   const S reps = 1e-6;
 
   Matrix3<S> Bf = B.cwiseAbs();
   Bf.array() += reps;
 
-  // if any of these tests are one-sided, then the polyhedra are disjoint
-
-  // A1 x A2 = A0
-  t = ((T[0] < 0.0) ? -T[0] : T[0]);
-
-  if(t > (a[0] + Bf.row(0).dot(b)))
+  // Test the three major axes of the OBB a.
+  center_dist = T.cwiseAbs();
+  halfwidth_sum = a + Bf * b;
+  diff = center_dist - halfwidth_sum;
+  if ((diff.array() > 0).any()) {
     return true;
+  }
 
-  // B1 x B2 = B0
-  s =  B.col(0).dot(T);
-  t = ((s < 0.0) ? -s : s);
-
-  if(t > (b[0] + Bf.col(0).dot(a)))
+  // Test the three major axes of the OBB b.
+  center_dist = (B.transpose() * T).cwiseAbs();
+  halfwidth_sum = b + Bf.transpose() * a;
+  diff = center_dist - halfwidth_sum;
+  if ((diff.array() > 0).any()) {
     return true;
+  }
 
-  // A2 x A0 = A1
-  t = ((T[1] < 0.0) ? -T[1] : T[1]);
-
-  if(t > (a[1] + Bf.row(1).dot(b)))
-    return true;
-
-  // A0 x A1 = A2
-  t =((T[2] < 0.0) ? -T[2] : T[2]);
-
-  if(t > (a[2] + Bf.row(2).dot(b)))
-    return true;
-
-  // B2 x B0 = B1
-  s = B.col(1).dot(T);
-  t = ((s < 0.0) ? -s : s);
-
-  if(t > (b[1] + Bf.col(1).dot(a)))
-    return true;
-
-  // B0 x B1 = B2
-  s = B.col(2).dot(T);
-  t = ((s < 0.0) ? -s : s);
-
-  if(t > (b[2] + Bf.col(2).dot(a)))
-    return true;
+  // Test the 9 different cross-axes.
+  Matrix3<S> symmetric_matrix;
+  symmetric_matrix <<    0, b[2], b[1],
+                      b[2],    0, b[0],
+                      b[1], b[0],    0;
 
   // A0 x B0
-  s = T[2] * B(1, 0) - T[1] * B(2, 0);
-  t = ((s < 0.0) ? -s : s);
-
-  if(t > (a[1] * Bf(2, 0) + a[2] * Bf(1, 0) +
-          b[1] * Bf(0, 2) + b[2] * Bf(0, 1)))
-    return true;
-
   // A0 x B1
-  s = T[2] * B(1, 1) - T[1] * B(2, 1);
-  t = ((s < 0.0) ? -s : s);
-
-  if(t > (a[1] * Bf(2, 1) + a[2] * Bf(1, 1) +
-          b[0] * Bf(0, 2) + b[2] * Bf(0, 0)))
-    return true;
-
   // A0 x B2
-  s = T[2] * B(1, 2) - T[1] * B(2, 2);
-  t = ((s < 0.0) ? -s : s);
-
-  if(t > (a[1] * Bf(2, 2) + a[2] * Bf(1, 2) +
-          b[0] * Bf(0, 1) + b[1] * Bf(0, 0)))
+  center_dist = (T[2] * B.row(1) - T[1] * B.row(2)).cwiseAbs();
+  halfwidth_sum = Bf.row(2) * a[1] + Bf.row(1) * a[2] + Bf.row(0) * symmetric_matrix;
+  diff = center_dist - halfwidth_sum;
+  if ((diff.array() > 0).any()) {
     return true;
+  }
 
   // A1 x B0
-  s = T[0] * B(2, 0) - T[2] * B(0, 0);
-  t = ((s < 0.0) ? -s : s);
-
-  if(t > (a[0] * Bf(2, 0) + a[2] * Bf(0, 0) +
-          b[1] * Bf(1, 2) + b[2] * Bf(1, 1)))
-    return true;
-
   // A1 x B1
-  s = T[0] * B(2, 1) - T[2] * B(0, 1);
-  t = ((s < 0.0) ? -s : s);
-
-  if(t > (a[0] * Bf(2, 1) + a[2] * Bf(0, 1) +
-          b[0] * Bf(1, 2) + b[2] * Bf(1, 0)))
-    return true;
-
   // A1 x B2
-  s = T[0] * B(2, 2) - T[2] * B(0, 2);
-  t = ((s < 0.0) ? -s : s);
-
-  if(t > (a[0] * Bf(2, 2) + a[2] * Bf(0, 2) +
-          b[0] * Bf(1, 1) + b[1] * Bf(1, 0)))
+  center_dist = (T[0] * B.row(2) - T[2] * B.row(0)).cwiseAbs();
+  halfwidth_sum = Bf.row(2) * a[0] + Bf.row(0) * a[2] + Bf.row(1) * symmetric_matrix;
+  diff = center_dist - halfwidth_sum;
+  if ((diff.array() > 0).any()) {
     return true;
+  }
 
   // A2 x B0
-  s = T[1] * B(0, 0) - T[0] * B(1, 0);
-  t = ((s < 0.0) ? -s : s);
-
-  if(t > (a[0] * Bf(1, 0) + a[1] * Bf(0, 0) +
-          b[1] * Bf(2, 2) + b[2] * Bf(2, 1)))
-    return true;
-
   // A2 x B1
-  s = T[1] * B(0, 1) - T[0] * B(1, 1);
-  t = ((s < 0.0) ? -s : s);
-
-  if(t > (a[0] * Bf(1, 1) + a[1] * Bf(0, 1) +
-          b[0] * Bf(2, 2) + b[2] * Bf(2, 0)))
-    return true;
-
   // A2 x B2
-  s = T[1] * B(0, 2) - T[0] * B(1, 2);
-  t = ((s < 0.0) ? -s : s);
-
-  if(t > (a[0] * Bf(1, 2) + a[1] * Bf(0, 2) +
-          b[0] * Bf(2, 1) + b[1] * Bf(2, 0)))
+  center_dist = (T[1] * B.row(0) - T[0] * B.row(1)).cwiseAbs();
+  halfwidth_sum = Bf.row(1) * a[0] + Bf.row(0) * a[1] + Bf.row(2) * symmetric_matrix;
+  diff = center_dist - halfwidth_sum;
+  if ((diff.array() > 0).any()) {
     return true;
+  }
 
   return false;
-
 }
 
 //==============================================================================
@@ -529,126 +467,9 @@ bool obbDisjoint(
     const Vector3<S>& a,
     const Vector3<S>& b)
 {
-  S t, s;
-  const S reps = 1e-6;
-
-  Matrix3<S> Bf = tf.linear().cwiseAbs();
-  Bf.array() += reps;
-
-  // if any of these tests are one-sided, then the polyhedra are disjoint
-
-  // A1 x A2 = A0
-  t = ((tf.translation()[0] < 0.0) ? -tf.translation()[0] : tf.translation()[0]);
-
-  if(t > (a[0] + Bf.row(0).dot(b)))
-    return true;
-
-  // B1 x B2 = B0
-  s =  tf.linear().col(0).dot(tf.translation());
-  t = ((s < 0.0) ? -s : s);
-
-  if(t > (b[0] + Bf.col(0).dot(a)))
-    return true;
-
-  // A2 x A0 = A1
-  t = ((tf.translation()[1] < 0.0) ? -tf.translation()[1] : tf.translation()[1]);
-
-  if(t > (a[1] + Bf.row(1).dot(b)))
-    return true;
-
-  // A0 x A1 = A2
-  t =((tf.translation()[2] < 0.0) ? -tf.translation()[2] : tf.translation()[2]);
-
-  if(t > (a[2] + Bf.row(2).dot(b)))
-    return true;
-
-  // B2 x B0 = B1
-  s = tf.linear().col(1).dot(tf.translation());
-  t = ((s < 0.0) ? -s : s);
-
-  if(t > (b[1] + Bf.col(1).dot(a)))
-    return true;
-
-  // B0 x B1 = B2
-  s = tf.linear().col(2).dot(tf.translation());
-  t = ((s < 0.0) ? -s : s);
-
-  if(t > (b[2] + Bf.col(2).dot(a)))
-    return true;
-
-  // A0 x B0
-  s = tf.translation()[2] * tf.linear()(1, 0) - tf.translation()[1] * tf.linear()(2, 0);
-  t = ((s < 0.0) ? -s : s);
-
-  if(t > (a[1] * Bf(2, 0) + a[2] * Bf(1, 0) +
-          b[1] * Bf(0, 2) + b[2] * Bf(0, 1)))
-    return true;
-
-  // A0 x B1
-  s = tf.translation()[2] * tf.linear()(1, 1) - tf.translation()[1] * tf.linear()(2, 1);
-  t = ((s < 0.0) ? -s : s);
-
-  if(t > (a[1] * Bf(2, 1) + a[2] * Bf(1, 1) +
-          b[0] * Bf(0, 2) + b[2] * Bf(0, 0)))
-    return true;
-
-  // A0 x B2
-  s = tf.translation()[2] * tf.linear()(1, 2) - tf.translation()[1] * tf.linear()(2, 2);
-  t = ((s < 0.0) ? -s : s);
-
-  if(t > (a[1] * Bf(2, 2) + a[2] * Bf(1, 2) +
-          b[0] * Bf(0, 1) + b[1] * Bf(0, 0)))
-    return true;
-
-  // A1 x B0
-  s = tf.translation()[0] * tf.linear()(2, 0) - tf.translation()[2] * tf.linear()(0, 0);
-  t = ((s < 0.0) ? -s : s);
-
-  if(t > (a[0] * Bf(2, 0) + a[2] * Bf(0, 0) +
-          b[1] * Bf(1, 2) + b[2] * Bf(1, 1)))
-    return true;
-
-  // A1 x B1
-  s = tf.translation()[0] * tf.linear()(2, 1) - tf.translation()[2] * tf.linear()(0, 1);
-  t = ((s < 0.0) ? -s : s);
-
-  if(t > (a[0] * Bf(2, 1) + a[2] * Bf(0, 1) +
-          b[0] * Bf(1, 2) + b[2] * Bf(1, 0)))
-    return true;
-
-  // A1 x B2
-  s = tf.translation()[0] * tf.linear()(2, 2) - tf.translation()[2] * tf.linear()(0, 2);
-  t = ((s < 0.0) ? -s : s);
-
-  if(t > (a[0] * Bf(2, 2) + a[2] * Bf(0, 2) +
-          b[0] * Bf(1, 1) + b[1] * Bf(1, 0)))
-    return true;
-
-  // A2 x B0
-  s = tf.translation()[1] * tf.linear()(0, 0) - tf.translation()[0] * tf.linear()(1, 0);
-  t = ((s < 0.0) ? -s : s);
-
-  if(t > (a[0] * Bf(1, 0) + a[1] * Bf(0, 0) +
-          b[1] * Bf(2, 2) + b[2] * Bf(2, 1)))
-    return true;
-
-  // A2 x B1
-  s = tf.translation()[1] * tf.linear()(0, 1) - tf.translation()[0] * tf.linear()(1, 1);
-  t = ((s < 0.0) ? -s : s);
-
-  if(t > (a[0] * Bf(1, 1) + a[1] * Bf(0, 1) +
-          b[0] * Bf(2, 2) + b[2] * Bf(2, 0)))
-    return true;
-
-  // A2 x B2
-  s = tf.translation()[1] * tf.linear()(0, 2) - tf.translation()[0] * tf.linear()(1, 2);
-  t = ((s < 0.0) ? -s : s);
-
-  if(t > (a[0] * Bf(1, 2) + a[1] * Bf(0, 2) +
-          b[0] * Bf(2, 1) + b[1] * Bf(2, 0)))
-    return true;
-
-  return false;
+  Matrix3<S> B = tf.linear();
+  Vector3<S> T = tf.translation();
+  return obbDisjoint(B, T, a, b);
 }
 
 } // namespace fcl
