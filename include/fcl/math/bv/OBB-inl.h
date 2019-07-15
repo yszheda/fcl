@@ -397,27 +397,18 @@ template <typename S>
 bool obbDisjoint(const Matrix3<S>& B, const Vector3<S>& T,
                  const Vector3<S>& a, const Vector3<S>& b)
 {
-  Vector3<S> center_dist;     // projection of center distance along three axes
-  Vector3<S> halfwidth_sum;   // projection of the sum of halfwidths along three axes
-  Vector3<S> diff;
   const S reps = 1e-6;
 
   Matrix3<S> Bf = B.cwiseAbs();
   Bf.array() += reps;
 
   // Test the three major axes of the OBB a.
-  center_dist = T.cwiseAbs();
-  halfwidth_sum = a + Bf * b;
-  diff = center_dist - halfwidth_sum;
-  if ((diff.array() > 0).any()) {
+  if (((T.cwiseAbs() - (a + Bf * b)).array() > 0).any()) {
     return true;
   }
 
   // Test the three major axes of the OBB b.
-  center_dist = (B.transpose() * T).cwiseAbs();
-  halfwidth_sum = b + Bf.transpose() * a;
-  diff = center_dist - halfwidth_sum;
-  if ((diff.array() > 0).any()) {
+  if ((((B.transpose() * T).cwiseAbs() - (b + Bf.transpose() * a)).array() > 0).any()) {
     return true;
   }
 
@@ -430,35 +421,27 @@ bool obbDisjoint(const Matrix3<S>& B, const Vector3<S>& T,
   // A0 x B0
   // A0 x B1
   // A0 x B2
-  center_dist = (T[2] * B.row(1) - T[1] * B.row(2)).cwiseAbs();
-  halfwidth_sum = Bf.row(2) * a[1] + Bf.row(1) * a[2] + Bf.row(0) * symmetric_matrix;
-  diff = center_dist - halfwidth_sum;
-  if ((diff.array() > 0).any()) {
+  if ((((T[2] * B.row(1) - T[1] * B.row(2)).cwiseAbs() - (Bf.row(2) * a[1] + Bf.row(1) * a[2] + Bf.row(0) * symmetric_matrix)).array() > 0).any()) {
     return true;
   }
 
   // A1 x B0
   // A1 x B1
   // A1 x B2
-  center_dist = (T[0] * B.row(2) - T[2] * B.row(0)).cwiseAbs();
-  halfwidth_sum = Bf.row(2) * a[0] + Bf.row(0) * a[2] + Bf.row(1) * symmetric_matrix;
-  diff = center_dist - halfwidth_sum;
-  if ((diff.array() > 0).any()) {
+  if ((((T[0] * B.row(2) - T[2] * B.row(0)).cwiseAbs() - (Bf.row(2) * a[0] + Bf.row(0) * a[2] + Bf.row(1) * symmetric_matrix)).array() > 0).any()) {
     return true;
   }
 
   // A2 x B0
   // A2 x B1
   // A2 x B2
-  center_dist = (T[1] * B.row(0) - T[0] * B.row(1)).cwiseAbs();
-  halfwidth_sum = Bf.row(1) * a[0] + Bf.row(0) * a[1] + Bf.row(2) * symmetric_matrix;
-  diff = center_dist - halfwidth_sum;
-  if ((diff.array() > 0).any()) {
+  if ((((T[1] * B.row(0) - T[0] * B.row(1)).cwiseAbs() - (Bf.row(1) * a[0] + Bf.row(0) * a[1] + Bf.row(2) * symmetric_matrix)).array() > 0).any()) {
     return true;
   }
 
   return false;
 }
+
 
 //==============================================================================
 template <typename S>
