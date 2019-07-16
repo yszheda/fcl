@@ -57,57 +57,72 @@
 #if defined (__SSE4__)
 #include <smmintrin.h>
 #endif
+#if defined (__AVX__)
+#include <immintrin.h>
+#endif
 
 
 namespace fcl
 {
 
-/** \brief FCL internals. Ignore this :) unless you are God */
 namespace details
 {
 
-#define vec_splat(a, e) _mm_shuffle_ps((a), (a), _MM_SHUFFLE((e), (e), (e), (e)))
-#define vec_splatd(a, e) _mm_shuffle_pd((a), (a), _MM_SHUFFLE2((e), (e)))
-
-#define _mm_ror_ps(x, e) (((e) % 4) ? _mm_shuffle_ps((x), (x), _MM_SHUFFLE(((e)+3)%4, ((e)+2)%4, ((e)+1)%4, (e)%4)) : (x))
-
-#define _mm_rol_ps(x, e) (((e) % 4) ? _mm_shuffle_ps((x), (x), _MM_SHUFFLE((7-(e))%4, (6-(e))%4, (5-(e))%4, (4-(e))%4)) : (x))
+#define vec_splat_ps(a, e) _mm_shuffle_ps((a), (a), _MM_SHUFFLE((e), (e), (e), (e)))
+#define vec_splat_pd(a, e) _mm256_shuffle_pd((a), (a), _MM_SHUFFLE((e), (e), (e), (e)))
 
 
-//----------------------------------------
-// Some of the following macros / matrix functions are adapted from MathGeoLib
+//==============================================================================
+// Some of the following macros / matrix functions are adapted from MathGeoLib:
 // https://github.com/juj/MathGeoLib
 
-static const __m128 simd4fSignBit = _mm_set1_ps(-0.f); // -0.f = 1 << 31
-#define abs_ps(x) _mm_andnot_ps(fcl::details::simd4fSignBit, (x))
+inline __m128 abs_ps(const __m128& x)
+{
+  static const __m128 sign_mask = _mm_set1_ps(-0.f); // -0.f = 1 << 31
+  return _mm_andnot_ps(sign_mask, x);
+}
+#if defined (__AVX__)
+inline __m256d abs_pd(const __m256d& x)
+{
+  static const __m256d sign_mask = _mm256_set1_pd(-0); // -0 = 1 << 63
+  return _mm256_andnot_pd(sign_mask, x);
+}
+#endif
 
 #define shuffle1_ps(reg, shuffle) _mm_castsi128_ps(_mm_shuffle_epi32(_mm_castps_si128((reg)), (shuffle)))
 #define xxxw_ps(x) shuffle1_ps((x), _MM_SHUFFLE(3,0,0,0))
 #define yyyw_ps(x) shuffle1_ps((x), _MM_SHUFFLE(3,1,1,1))
 #define zzzw_ps(x) shuffle1_ps((x), _MM_SHUFFLE(3,2,2,2))
 
+#if defined (__AVX__)
+// #define shuffle1_pd(reg, shuffle) _mm256_castsi256_pd(_mm256_shuffle_epi32(_mm256_castpd_si256((reg)), (shuffle)))
+// #define xxxw_pd(x) shuffle1_pd((x), _MM_SHUFFLE(3,0,0,0))
+// #define yyyw_pd(x) shuffle1_pd((x), _MM_SHUFFLE(3,1,1,1))
+// #define zzzw_pd(x) shuffle1_pd((x), _MM_SHUFFLE(3,2,2,2))
+
+// TODO
+// #define xxxw_pd(x) _mm256_setr_pd((x)[0], (x)[0], (x)[0], 0)
+// #define yyyw_pd(x) _mm256_setr_pd((x)[1], (x)[1], (x)[1], 0)
+// #define zzzw_pd(x) _mm256_setr_pd((x)[2], (x)[2], (x)[2], 0)
+#define xxxw_pd(x) _mm256_set1_pd((x)[0])
+#define yyyw_pd(x) _mm256_set1_pd((x)[1])
+#define zzzw_pd(x) _mm256_set1_pd((x)[2])
+#endif
+
 #define allzero_ps(x) _mm_testz_si128(_mm_castps_si128((x)), _mm_castps_si128((x)))
-// inline bool allzero_ps(__m128 x)
-// {
-//   float a[4];
-//   _mm_store_ps(a, x);
-//   return
-//     (a[0] == 0.f) ||
-//     (a[1] == 0.f) ||
-//     (a[2] == 0.f) ||
-//     (a[3] == 0.f);
-// }
-//
-// inline bool allzero_ps(__m128 x)
-// {
-//   int mask = _mm_movemask_epi8((__m128i)x);
-//   return mask == 0x0000;
-// }
+#define allzero_pd(x) _mm256_testz_si256(_mm256_castpd_si256((x)), _mm256_castpd_si256((x)))
 
-#define madd_ps(a, b, c) _mm_add_ps(_mm_mul_ps((a), (b)), (c))
-#define msub_ps(a, b, c) _mm_sub_ps(_mm_mul_ps((a), (b)), (c))
+// fused multiply–accumulate operation
+#define fmadd_ps(a, b, c) _mm_add_ps(_mm_mul_ps((a), (b)), (c))
+#define fmsub_ps(a, b, c) _mm_sub_ps(_mm_mul_ps((a), (b)), (c))
+
+#if defined (__AVX__)
+#define fmadd_pd(a, b, c) _mm256_add_pd(_mm256_mul_pd((a), (b)), (c))
+#define fmsub_pd(a, b, c) _mm256_sub_pd(_mm256_mul_pd((a), (b)), (c))
+#endif
 
 
+//==============================================================================
 /// @brief
 /// Compute the transpose of M, where M is a 3x4 matrix denoted by an array of 4 __m128's
 /// and all of its last column is zero.
@@ -161,7 +176,30 @@ void mat3x4_transpose(const __m128 src[3], __m128 dst[3])
       &dst[0], &dst[1], &dst[2]);
 }
 
+#if defined (__AVX__)
+static inline
+void mat3x4_transpose(const __m256d* src_r0, const __m256d* src_r1, const __m256d* src_r2, __m256d* dst_r0, __m256d* dst_r1, __m256d* dst_r2)
+{
+  __m256d src3 = _mm256_setzero_pd();
+  __m256d tmp0 = _mm256_unpacklo_pd(*src_r0, *src_r2);  // [ x0 x2 y0 y2 ]
+  __m256d tmp1 = _mm256_unpacklo_pd(*src_r1, src3);     // [ x1  0 y1  0 ]
+  __m256d tmp2 = _mm256_unpackhi_pd(*src_r0, *src_r2);  // [ z0 z2  0  0 ]
+  __m256d tmp3 = _mm256_unpackhi_pd(*src_r1, src3);     // [ z1  0  0  0 ]
+  *dst_r0 = _mm256_unpacklo_pd(tmp0, tmp1);             // [ x0 x1 x2  0 ]
+  *dst_r1 = _mm256_unpackhi_pd(tmp0, tmp1);             // [ y0 y1 y2  0 ]
+  *dst_r2 = _mm256_unpacklo_pd(tmp2, tmp3);             // [ z0 z1 z2  0 ]
+}
 
+static inline
+void mat3x4_transpose(const __m256d src[3], __m256d dst[3])
+{
+  mat3x4_transpose(&src[0], &src[1], &src[2],
+      &dst[0], &dst[1], &dst[2]);
+}
+#endif
+
+
+//==============================================================================
 /// @brief
 /// Compute the product M*v,
 /// where M is a 3x4 matrix denoted by an array of 4 __m128's,
@@ -240,7 +278,32 @@ __m128 mat3x4_mul_vec4(const __m128 matrix[3], const __m128 vector)
   return mat3x4_mul_vec4(&matrix[0], &matrix[1], &matrix[2], &vector);
 }
 
+#if defined (__AVX__)
+static inline
+__m256d mat3x4_mul_vec4(const __m256d* matrix_r0, const __m256d* matrix_r1, const __m256d* matrix_r2, const __m256d* vector)
+{
+  __m256d x = _mm256_mul_pd(*matrix_r0, *vector);     // [ x0v0 x1v1 x2v2 0 ]
+  __m256d y = _mm256_mul_pd(*matrix_r1, *vector);     // [ y0v0 y1v1 y2v2 0 ]
+  __m256d t0 = _mm256_unpacklo_pd(x, y);              // [ x0v0 y0v0 x1v1 y1v1 ]
+  __m256d t1 = _mm256_unpackhi_pd(x, y);              // [ x2v2 y2v2 0 0 ]
+  t0 = _mm256_add_pd(t0, t1);                         // [ x0v0+x2v2 y0v0+y2v2 x1v1 y1v1 ]
+  __m256d z = _mm256_mul_pd(*matrix_r2, *vector);     // [ z0v0 z1v1 z2v2 0 ]
+  __m256d w = _mm256_set1_pd(0);
+  __m256d t2 = _mm256_unpacklo_pd(z, w);              // [ z0v0 0 z1v1 0 ]
+  __m256d t3 = _mm256_unpackhi_pd(z, w);              // [ z2v2 0 0 0 ]
+  t2 = _mm256_add_pd(t2, t3);                         // [ z0v0+z2v2 0 z1v1 0 ]
+  // [ x0v0+x2v2 y0v0+y2v2 z1v1 0 ] + [ x1v1 y1y1 z1v1 0 ]
+  return _mm256_add_pd(_mm256_blend_pd(t0, t2, 0b1100), _mm256_permute2f128_pd(t0, t2, 0x21));
+}
 
+static inline
+__m256d mat3x4_mul_vec4(const __m256d matrix[3], const __m256d vector)
+{
+  return mat3x4_mul_vec4(&matrix[0], &matrix[1], &matrix[2], &vector);
+}
+#endif
+
+//==============================================================================
 /// @brief
 /// Compute the product (M)^T*v,
 /// where M is a 3x4 matrix denoted by an array of 4 __m128's,
@@ -259,9 +322,9 @@ __m128 mat3x4_mul_vec4(const __m128 matrix[3], const __m128 vector)
 static inline
 __m128 transp_mat3x4_mul_vec4(const __m128* matrix_r0, const __m128* matrix_r1, const __m128* matrix_r2, const __m128* vector)
 {
-  __m128 r0 = _mm_mul_ps(vec_splat(*vector, 0), *matrix_r0);
-  __m128 r1 = _mm_mul_ps(vec_splat(*vector, 1), *matrix_r1);
-  __m128 r2 = _mm_mul_ps(vec_splat(*vector, 2), *matrix_r2);
+  __m128 r0 = _mm_mul_ps(vec_splat_ps(*vector, 0), *matrix_r0);
+  __m128 r1 = _mm_mul_ps(vec_splat_ps(*vector, 1), *matrix_r1);
+  __m128 r2 = _mm_mul_ps(vec_splat_ps(*vector, 2), *matrix_r2);
   return _mm_add_ps(_mm_add_ps(r0, r1), r2);
 }
 
@@ -271,7 +334,25 @@ __m128 transp_mat3x4_mul_vec4(const __m128 matrix[3], const __m128 vector)
   return transp_mat3x4_mul_vec4(&matrix[0], &matrix[1], &matrix[2], &vector);
 }
 
+#if defined (__AVX__)
+static inline
+__m256d transp_mat3x4_mul_vec4(const __m256d* matrix_r0, const __m256d* matrix_r1, const __m256d* matrix_r2, const __m256d* vector)
+{
+  __m256d r0 = _mm256_mul_pd(vec_splat_pd(*vector, 0), *matrix_r0);
+  __m256d r1 = _mm256_mul_pd(vec_splat_pd(*vector, 1), *matrix_r1);
+  __m256d r2 = _mm256_mul_pd(vec_splat_pd(*vector, 2), *matrix_r2);
+  return _mm256_add_pd(_mm256_add_pd(r0, r1), r2);
+}
 
+static inline
+__m256d transp_mat3x4_mul_vec4(const __m256d matrix[3], const __m256d vector)
+{
+  return transp_mat3x4_mul_vec4(&matrix[0], &matrix[1], &matrix[2], &vector);
+}
+#endif
+
+
+//==============================================================================
 /// @brief
 /// Compute the product M1*M2,
 /// where M1 is a 3x4 matrix denoted by an array of 4 __m128's,
@@ -299,21 +380,21 @@ void mat3x3_mul_mat3x3(__m128* out_r0, __m128* out_r1, __m128* out_r2,
 {
   const __m128 m2_3 = _mm_set_ps(1.f, 0.f, 0.f, 0.f);
 
-  __m128 r0 = _mm_mul_ps(vec_splat(*m1_r0, 0), *m2_r0);
-  __m128 r1 = _mm_mul_ps(vec_splat(*m1_r0, 1), *m2_r1);
-  __m128 r2 = _mm_mul_ps(vec_splat(*m1_r0, 2), *m2_r2);
+  __m128 r0 = _mm_mul_ps(vec_splat_ps(*m1_r0, 0), *m2_r0);
+  __m128 r1 = _mm_mul_ps(vec_splat_ps(*m1_r0, 1), *m2_r1);
+  __m128 r2 = _mm_mul_ps(vec_splat_ps(*m1_r0, 2), *m2_r2);
   __m128 r3 = _mm_mul_ps(*m1_r0, m2_3);
   *out_r0 = _mm_add_ps(_mm_add_ps(r0, r1), _mm_add_ps(r2, r3));
 
-  r0 = _mm_mul_ps(vec_splat(*m1_r1, 0), *m2_r0);
-  r1 = _mm_mul_ps(vec_splat(*m1_r1, 1), *m2_r1);
-  r2 = _mm_mul_ps(vec_splat(*m1_r1, 2), *m2_r2);
+  r0 = _mm_mul_ps(vec_splat_ps(*m1_r1, 0), *m2_r0);
+  r1 = _mm_mul_ps(vec_splat_ps(*m1_r1, 1), *m2_r1);
+  r2 = _mm_mul_ps(vec_splat_ps(*m1_r1, 2), *m2_r2);
   r3 = _mm_mul_ps(*m1_r1, m2_3);
   *out_r1 = _mm_add_ps(_mm_add_ps(r0, r1), _mm_add_ps(r2, r3));
 
-  r0 = _mm_mul_ps(vec_splat(*m1_r2, 0), *m2_r0);
-  r1 = _mm_mul_ps(vec_splat(*m1_r2, 1), *m2_r1);
-  r2 = _mm_mul_ps(vec_splat(*m1_r2, 2), *m2_r2);
+  r0 = _mm_mul_ps(vec_splat_ps(*m1_r2, 0), *m2_r0);
+  r1 = _mm_mul_ps(vec_splat_ps(*m1_r2, 1), *m2_r1);
+  r2 = _mm_mul_ps(vec_splat_ps(*m1_r2, 2), *m2_r2);
   r3 = _mm_mul_ps(*m1_r2, m2_3);
   *out_r2 = _mm_add_ps(_mm_add_ps(r0, r1), _mm_add_ps(r2, r3));
 }
@@ -326,7 +407,44 @@ void mat3x3_mul_mat3x3(__m128 out[3], const __m128 m1[3], const __m128 m2[3])
       &m2[0], &m2[1], &m2[2]);
 }
 
+#if defined (__AVX__)
+static inline
+void mat3x3_mul_mat3x3(__m256d* out_r0, __m256d* out_r1, __m256d* out_r2,
+    const __m256d* m1_r0, const __m256d* m1_r1, const __m256d* m1_r2,
+    const __m256d* m2_r0, const __m256d* m2_r1, const __m256d* m2_r2)
+{
+  const __m256d m2_3 = _mm256_setr_pd(0, 0, 0, 1);
 
+  __m256d r0 = _mm256_mul_pd(vec_splat_pd(*m1_r0, 0), *m2_r0);
+  __m256d r1 = _mm256_mul_pd(vec_splat_pd(*m1_r0, 1), *m2_r1);
+  __m256d r2 = _mm256_mul_pd(vec_splat_pd(*m1_r0, 2), *m2_r2);
+  __m256d r3 = _mm256_mul_pd(*m1_r0, m2_3);
+  *out_r0 = _mm256_add_pd(_mm256_add_pd(r0, r1), _mm256_add_pd(r2, r3));
+
+  r0 = _mm256_mul_pd(vec_splat_pd(*m1_r1, 0), *m2_r0);
+  r1 = _mm256_mul_pd(vec_splat_pd(*m1_r1, 1), *m2_r1);
+  r2 = _mm256_mul_pd(vec_splat_pd(*m1_r1, 2), *m2_r2);
+  r3 = _mm256_mul_pd(*m1_r1, m2_3);
+  *out_r1 = _mm256_add_pd(_mm256_add_pd(r0, r1), _mm256_add_pd(r2, r3));
+
+  r0 = _mm256_mul_pd(vec_splat_pd(*m1_r2, 0), *m2_r0);
+  r1 = _mm256_mul_pd(vec_splat_pd(*m1_r2, 1), *m2_r1);
+  r2 = _mm256_mul_pd(vec_splat_pd(*m1_r2, 2), *m2_r2);
+  r3 = _mm256_mul_pd(*m1_r2, m2_3);
+  *out_r2 = _mm256_add_pd(_mm256_add_pd(r0, r1), _mm256_add_pd(r2, r3));
+}
+
+static inline
+void mat3x3_mul_mat3x3(__m256d out[3], const __m256d m1[3], const __m256d m2[3])
+{
+  mat3x3_mul_mat3x3(&out[0], &out[1], &out[2],
+      &m1[0], &m1[1], &m1[2],
+      &m2[0], &m2[1], &m2[2]);
+}
+#endif
+
+
+//==============================================================================
 /// @brief
 /// Compute the product (M1)^T*M2,
 /// where M1 is a 3x4 matrix denoted by an array of 4 __m128's,
@@ -354,19 +472,19 @@ void transp_mat3x3_mul_mat3x3(__m128* out_r0, __m128* out_r1, __m128* out_r2,
 {
   const __m128 padding = _mm_setzero_ps();
 
-  __m128 r0 = _mm_mul_ps(vec_splat(*m1_r0, 0), *m2_r0);
-  __m128 r1 = _mm_mul_ps(vec_splat(*m1_r1, 0), *m2_r1);
-  __m128 r2 = _mm_mul_ps(vec_splat(*m1_r2, 0), *m2_r2);
+  __m128 r0 = _mm_mul_ps(vec_splat_ps(*m1_r0, 0), *m2_r0);
+  __m128 r1 = _mm_mul_ps(vec_splat_ps(*m1_r1, 0), *m2_r1);
+  __m128 r2 = _mm_mul_ps(vec_splat_ps(*m1_r2, 0), *m2_r2);
   *out_r0 = _mm_add_ps(_mm_add_ps(r0, r1), _mm_add_ps(r2, padding));
 
-  r0 = _mm_mul_ps(vec_splat(*m1_r0, 1), *m2_r0);
-  r1 = _mm_mul_ps(vec_splat(*m1_r1, 1), *m2_r1);
-  r2 = _mm_mul_ps(vec_splat(*m1_r2, 1), *m2_r2);
+  r0 = _mm_mul_ps(vec_splat_ps(*m1_r0, 1), *m2_r0);
+  r1 = _mm_mul_ps(vec_splat_ps(*m1_r1, 1), *m2_r1);
+  r2 = _mm_mul_ps(vec_splat_ps(*m1_r2, 1), *m2_r2);
   *out_r1 = _mm_add_ps(_mm_add_ps(r0, r1), _mm_add_ps(r2, padding));
 
-  r0 = _mm_mul_ps(vec_splat(*m1_r0, 2), *m2_r0);
-  r1 = _mm_mul_ps(vec_splat(*m1_r1, 2), *m2_r1);
-  r2 = _mm_mul_ps(vec_splat(*m1_r2, 2), *m2_r2);
+  r0 = _mm_mul_ps(vec_splat_ps(*m1_r0, 2), *m2_r0);
+  r1 = _mm_mul_ps(vec_splat_ps(*m1_r1, 2), *m2_r1);
+  r2 = _mm_mul_ps(vec_splat_ps(*m1_r2, 2), *m2_r2);
   *out_r2 = _mm_add_ps(_mm_add_ps(r0, r1), _mm_add_ps(r2, padding));
 }
 
@@ -378,7 +496,41 @@ void transp_mat3x3_mul_mat3x3(__m128 out[3], const __m128 m1[3], const __m128 m2
       &m2[0], &m2[1], &m2[2]);
 }
 
+#if defined (__AVX__)
+static inline
+void transp_mat3x3_mul_mat3x3(__m256d* out_r0, __m256d* out_r1, __m256d* out_r2,
+    const __m256d* m1_r0, const __m256d* m1_r1, const __m256d* m1_r2,
+    const __m256d* m2_r0, const __m256d* m2_r1, const __m256d* m2_r2)
+{
+  const __m256d padding = _mm256_setzero_pd();
 
+  __m256d r0 = _mm256_mul_pd(vec_splat_pd(*m1_r0, 0), *m2_r0);
+  __m256d r1 = _mm256_mul_pd(vec_splat_pd(*m1_r1, 0), *m2_r1);
+  __m256d r2 = _mm256_mul_pd(vec_splat_pd(*m1_r2, 0), *m2_r2);
+  *out_r0 = _mm256_add_pd(_mm256_add_pd(r0, r1), _mm256_add_pd(r2, padding));
+
+  r0 = _mm256_mul_pd(vec_splat_pd(*m1_r0, 1), *m2_r0);
+  r1 = _mm256_mul_pd(vec_splat_pd(*m1_r1, 1), *m2_r1);
+  r2 = _mm256_mul_pd(vec_splat_pd(*m1_r2, 1), *m2_r2);
+  *out_r1 = _mm256_add_pd(_mm256_add_pd(r0, r1), _mm256_add_pd(r2, padding));
+
+  r0 = _mm256_mul_pd(vec_splat_pd(*m1_r0, 2), *m2_r0);
+  r1 = _mm256_mul_pd(vec_splat_pd(*m1_r1, 2), *m2_r1);
+  r2 = _mm256_mul_pd(vec_splat_pd(*m1_r2, 2), *m2_r2);
+  *out_r2 = _mm256_add_pd(_mm256_add_pd(r0, r1), _mm256_add_pd(r2, padding));
+}
+
+static inline
+void transp_mat3x3_mul_mat3x3(__m256d out[3], const __m256d m1[3], const __m256d m2[3])
+{
+  transp_mat3x3_mul_mat3x3(&out[0], &out[1], &out[2],
+      &m1[0], &m1[1], &m1[2],
+      &m2[0], &m2[1], &m2[2]);
+}
+#endif
+
+
+//==============================================================================
 /// @brief
 /// Compute the product M1*(M2)^T,
 /// where M1 is a 3x4 matrix denoted by an array of 4 __m128's,
@@ -429,6 +581,27 @@ void mat3x3_mul_transp_mat3x3(__m128 out[3], const __m128 m1[3], const __m128 m2
       &m2[0], &m2[1], &m2[2]);
 }
 #endif
+
+#if defined (__AVX__)
+static inline
+void mat3x3_mul_transp_mat3x3(__m256d* out_r0, __m256d* out_r1, __m256d* out_r2,
+    const __m256d* m1_r0, const __m256d* m1_r1, const __m256d* m1_r2,
+    const __m256d* m2_r0, const __m256d* m2_r1, const __m256d* m2_r2)
+{
+  *out_r0 = mat3x4_mul_vec4(m2_r0, m2_r1, m2_r2, m1_r0);
+  *out_r1 = mat3x4_mul_vec4(m2_r0, m2_r1, m2_r2, m1_r1);
+  *out_r2 = mat3x4_mul_vec4(m2_r0, m2_r1, m2_r2, m1_r2);
+}
+
+static inline
+void mat3x3_mul_transp_mat3x3(__m256d out[3], const __m256d m1[3], const __m256d m2[3])
+{
+  mat3x3_mul_transp_mat3x3(&out[0], &out[1], &out[2],
+      &m1[0], &m1[1], &m1[2],
+      &m2[0], &m2[1], &m2[2]);
+}
+#endif
+
 
 } // details
 } // fcl
