@@ -393,14 +393,29 @@ bool overlap(const Eigen::MatrixBase<DerivedA>& R0,
 }
 
 //==============================================================================
+// template <typename S>
+// bool obbDisjoint(const Eigen::Matrix<S, 4, 4>& B, const Eigen::Matrix<S, 4, 1>& T,
+//                  const Eigen::Matrix<S, 4, 1>& a, const Eigen::Matrix<S, 4, 1>& b)
 template <typename S>
-bool obbDisjoint(const Matrix3<S>& B, const Vector3<S>& T,
-                 const Vector3<S>& a, const Vector3<S>& b)
+bool obbDisjoint(const Matrix3<S>& B_unpadded, const Vector3<S>& T_unpadded,
+                 const Vector3<S>& a_unpadded, const Vector3<S>& b_unpadded)
 {
+  Eigen::Matrix<S, 4, 4> B = Eigen::Matrix<S, 4, 4>::Zero();
+  B.block(0, 0, 3, 3) = B_unpadded;
+  Eigen::Matrix<S, 4, 1> T;
+  T << T_unpadded, 0;
+  Eigen::Matrix<S, 4, 1> a;
+  a << a_unpadded, 0;
+  Eigen::Matrix<S, 4, 1> b;
+  b << b_unpadded, 0;
+
   const S reps = 1e-6;
 
-  Matrix3<S> Bf = B.cwiseAbs();
-  Bf.array() += reps;
+  Eigen::Matrix<S, 4, 4> Bf = Eigen::Matrix<S, 4, 4>::Zero();
+  // Bf.block(0, 0, 3, 3) = B_unpadded.cwiseAbs() + Eigen::Matrix<S, 3, 3>::Constant(reps);
+  // Bf.block(0, 0, 3, 3) = B_unpadded.cwiseAbs();
+  // Bf.block(0, 0, 3, 3).array() += reps;
+  Bf.block(0, 0, 3, 3).array() = B_unpadded.array().abs() + reps;
 
   // Test the three major axes of the OBB a.
   if (((T.cwiseAbs() - (a + Bf * b)).array() > 0).any()) {
@@ -413,10 +428,11 @@ bool obbDisjoint(const Matrix3<S>& B, const Vector3<S>& T,
   }
 
   // Test the 9 different cross-axes.
-  Matrix3<S> symmetric_matrix;
-  symmetric_matrix <<    0, b[2], b[1],
-                      b[2],    0, b[0],
-                      b[1], b[0],    0;
+  Eigen::Matrix<S, 4, 4> symmetric_matrix;
+  symmetric_matrix <<    0, b[2], b[1], 0,
+                      b[2],    0, b[0], 0,
+                      b[1], b[0],    0, 0,
+                      Eigen::Matrix<S, 4, 1>::Zero();
 
   // A0 x B0
   // A0 x B1
@@ -442,6 +458,22 @@ bool obbDisjoint(const Matrix3<S>& B, const Vector3<S>& T,
   return false;
 }
 
+#if 0
+template <typename S>
+bool obbDisjoint(const Matrix3<S>& B, const Vector3<S>& T,
+                 const Vector3<S>& a, const Vector3<S>& b)
+{
+  Eigen::Matrix<S, 4, 4> B_padded = Eigen::Matrix<S, 4, 4>::Zero();
+  B_padded.block(0, 0, 3, 3) = B;
+  Eigen::Matrix<S, 4, 1> T_padded;
+  T_padded << T, 0;
+  Eigen::Matrix<S, 4, 1> a_padded;
+  a_padded << a, 0;
+  Eigen::Matrix<S, 4, 1> b_padded;
+  b_padded << b, 0;
+  return obbDisjoint(B_padded, T_padded, a_padded, b_padded);
+}
+#endif
 
 //==============================================================================
 template <typename S>
